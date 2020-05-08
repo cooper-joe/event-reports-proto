@@ -29,14 +29,14 @@ function handleDecreaseVersion() {
     var data = checkFolderInfoRequest(this)
     if (undefined == data) return
     if ('' == data.link_down) return showMessage('This is the oldest version.')
-    window.open(data.link_down + '#' + encodeURIComponent(viewer.currentPage.getHash()), "_self");
+    window.open(data.link_down + '?' + encodeURIComponent(viewer.currentPage.getHash()), "_self");
 }
 
 function handleIncreaseVersion() {
     var data = checkFolderInfoRequest(this)
     if (undefined == data) return
     if ('' == data.link_up) return showMessage('This is the newest version.')
-    window.open(data.link_up + '#' + encodeURIComponent(viewer.currentPage.getHash()), "_self");
+    window.open(data.link_up + '?' + encodeURIComponent(viewer.currentPage.getHash()), "_self");
 }
 
 function doTransNext() {
@@ -119,6 +119,8 @@ function createViewer(story, files) {
         showLayout: false,
         isEmbed: false,
 
+        fullURL: "",
+
         prevPage: undefined,
         currentPage: undefined,
         lastRegularPage: undefined,
@@ -128,7 +130,7 @@ function createViewer(story, files) {
 
         backStack: [],
         urlLastIndex: -1,
-        handleURLRefresh: true,
+        urlLocked: false,
         files: files,
         userStoryPages: [],
         zoomEnabled: story.zoomEnabled,
@@ -185,15 +187,18 @@ function createViewer(story, files) {
             });
             jQuery(window).resize(function () { viewer.zoomContent() });
 
-            var s = document.location.search
-            if (s.includes('v') && this.versionViewer) {
+            if (this.urlParams.get('v') != null && this.versionViewer) {
                 this.versionViewer.toggle()
             }
         },
 
         initParseGetParams: function () {
-            var s = document.location.search
-            if (s.includes('embed')) {
+            const loc = document.location
+            this.fullURL = loc.protocol + "//" + loc.hostname + loc.pathname
+            this.urlParams = new URLSearchParams(loc.search.substring(1));
+            this.urlSearch = loc.search
+
+            if (this.urlParams.get('e') != null) {
                 this.isEmbed = true
                 // hide image preload indicator
                 $('#loading').hide()
@@ -352,27 +357,22 @@ function createViewer(story, files) {
         },
 
         share: function () {
-            var srcHref = document.location.href
-            var href = ''
-
-            if (document.location.search.includes('embed')) {
-                href = srcHref
-            } else {
-                href = srcHref.split('#')[0] + '?embed' + document.location.hash
-            }
-
             var page = undefined == this.lastRegularPage ? this.currentPage : this.lastRegularPage
 
-            var iframe = '<iframe src="' + href + '" style="border: none;" noborder="0"'
+            let url = this.fullURL
+            url += this._getSearchPath(page, 'e=1')
+
+            var iframe = '<iframe src="' + url + '" style="border: none;" noborder="0"'
             iframe += ' width="' + (story.iFrameSizeWidth ? story.iFrameSizeWidth : page.width) + '"'
             iframe += ' height="' + (story.iFrameSizeHeight ? story.iFrameSizeHeight : page.height) + '"'
             iframe += ' scrolling="auto" seamless id="iFrame1"></iframe>'
 
             iframe += '\n\n'
 
-            var ihref = srcHref.substring(0, srcHref.lastIndexOf("/"))
+            var ihref = url.substring(0, url.lastIndexOf("/"))
+
             ihref = ihref + "/images/" + page['image2x']
-            iframe += "<a target='_blank' href='" + srcHref + "'>" + "<img border='0' "
+            iframe += "<a target='_blank' href='" + url + "'>" + "<img border='0' "
             iframe += ' width="' + (story.iFrameSizeWidth ? story.iFrameSizeWidth : page.width) + '"'
             //iframe += ' height="'+(story.iFrameSizeHeight?story.iFrameSizeHeight:page.height) + '"'
             iframe += "src='" + ihref + "'"
@@ -668,7 +668,7 @@ function createViewer(story, files) {
             }
 
             // hide last modal 
-            var prevPageWasModal = this.prevPage && this.prevPage.isModal
+            var prevPageWasModal = this.prevPage != null && this.prevPage.type === "modal"
             if (prevPageWasModal) {
                 var prevImg = $('#img_' + this.prevPage.index);
                 if (prevImg.length) {
@@ -710,20 +710,31 @@ function createViewer(story, files) {
             contentModal.removeClass('hidden');
         },
 
+
+        _getSearchPath(page = null, extURL = null) {
+            if (!page) page = this.currentPage
+            let search = '?' + encodeURIComponent(page.getHash())
+            if (extURL != null && extURL != "") search += "&" + extURL
+            return search
+        },
+
         refresh_url: function (page, extURL = null) {
-            this.handleURLRefresh = false
+            if (this.urlLocked) return
 
             this.urlLastIndex = page.index
             $(document).attr('title', story.title + ': ' + page.title)
 
-            if (null == extURL) extURL = ''
+            if (this.isEmbed) {
+                if (null == extURL) extURL = ""
+                extURL += "&e=1"
+            }
 
-            location.hash = '#'
-                + encodeURIComponent(page.getHash())
-                + extURL
+            let newPath = document.location.pathname + this._getSearchPath(page, extURL)
 
+            window.history.pushState(newPath, page.title, newPath);
         },
 
+        /*
         _parseLocationHash: function () {
             var result = {
                 reset_url: false,
@@ -747,19 +758,40 @@ function createViewer(story, files) {
                 hash = '#' + hash.replace(/^[^#]*#?(.*)$/, '$1');
             }
 
-            result.hash = hash
+            result.page_name = hash
+            return result
+        },*/
+
+        _parseLocationSearch: function () {
+            //if (document.location.hash != null && document.location.hash != "")
+            //  return this._parseLocationHash()
+
+            var result = {
+                page_name: "",
+                reset_url: false,
+                overlayLinkIndex: undefined,
+                redirectOverlayLinkIndex: undefined,
+            }
+            this.urlParams.forEach(function (value, key) {
+                if ("" == value) result.page_name = key
+            }, this);
+
+            if (null == result.page_name || "" == result.page_name || this.urlParams.get(result.page_name) != "") {
+                result.page_name = ""
+                result.reset_url = true
+            } else {
+                result.overlayLinkIndex = this.urlParams.get("o")
+            }
             return result
         },
 
         handleNewLocation: function (initial) {
-            var hashInfo = this._parseLocationHash()
-
-            var pageName = hashInfo.hash.substring(1)
-            var pageIndex = this.getPageIndex(pageName, null);
+            var locInfo = this._parseLocationSearch()
+            var pageIndex = locInfo.page_name != null ? this.getPageIndex(locInfo.page_name, null) : null
             if (null == pageIndex) {
                 // get the default page
                 pageIndex = story.startPageIndex
-                hashInfo.reset_url = true
+                locInfo.reset_url = true
             }
 
             if (!initial && this.urlLastIndex == pageIndex) {
@@ -786,10 +818,10 @@ function createViewer(story, files) {
 
             // check if this page overlay
             // check if this redirect overlay
-            this.goTo(pageIndex, hashInfo.reset_url);
+            this.goTo(pageIndex, locInfo.reset_url);
 
-            if (hashInfo.overlayLinkIndex != null) {
-                page.showOverlayByLinkIndex(hashInfo.overlayLinkIndex)
+            if (locInfo.overlayLinkIndex != null) {
+                page.showOverlayByLinkIndex(locInfo.overlayLinkIndex)
             }
 
             if (!initial) this.urlLastIndex = pageIndex
@@ -927,7 +959,18 @@ function createViewer(story, files) {
             $('#nav-hide').slideToggle('fast', function () {
                 $('#nav').slideToggle('fast');
             }).addClass('hidden');
-        }
+        },
+
+
+        handleStateChanges: function (e) {
+            viewer.urlLocked = true
+            viewer.currentPage.hide(true, true)
+            viewer.currentPage = null
+
+            viewer.initParseGetParams()
+            viewer.handleNewLocation(true)
+            viewer.urlLocked = false
+        },
     };
 }
 
@@ -956,22 +999,59 @@ function addRemoveClass(mode, el, cls) {
     }
 }
 
+// Redirect from legacy format URL
+//    https://site.com/dd/index.html#home/o/10?shared  
+// to the new
+//    https://site.com/dd/index.html?home&o=10&shared=true
+
+function redirectFromHashToSearch() {
+    const loc = document.location
+    if (loc.hash == null || loc.hash.length == "") return false
+
+    let url = loc.protocol + "//" + loc.host + loc.pathname
+
+    if (loc.hash.indexOf('/') > 0) {
+        let hash = loc.hash
+        // read additonal parameters
+        var args = hash.split('/')
+        // check for link to click
+        let search = hash.substring(0, hash.indexOf('/'))
+        search = '?' + search.replace(/^[^#]*#?(.*)$/, '$1');
+        if (args[1] == 'o') {
+            search += "&o=" + args[2]
+        }
+        url += search
+    } else {
+        url += "?" + loc.hash.substring(1)
+    }
+    if (null != loc.search && "" != loc.search) {
+        let search = loc.search.substring(1)
+        if ("embed" == search) {
+            url += "&e=1"
+        }
+    }
+    //
+    document.location = url
+    return true
+}
+function handleStateChanges(e) {
+    viewer.handleStateChanges(e)
+}
 
 $(document).ready(function () {
+    if (redirectFromHashToSearch()) return
+
     viewer.initialize();
     if (!!('ontouchstart' in window) || !!('onmsgesturechange' in window)) {
         $('body').removeClass('screen');
     }
 
     viewer.handleNewLocation(true)
-
     if (!viewer.isEmbed) preloadAllPageImages();
 
-    $(window).hashchange(function (e) {
-        if (viewer.handleURLRefresh)
-            viewer.handleNewLocation(false)
-        viewer.handleURLRefresh = true
-    });
+    window.addEventListener('popstate', handleStateChanges);
+    $(window).hashchange(handleStateChanges);
+
     viewer.zoomContent()
     viewer.initializeLast()
 });
